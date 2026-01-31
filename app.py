@@ -7,38 +7,70 @@ from astral import LocationInfo
 from astral.sun import sun
 
 # ==========================================
-# 1. MODUL JANTUNG (PULSE GENERATOR)
+# 1. MODUL JANTUNG (ASTRONOMIS - SUNRISE TRIGGER)
 # ==========================================
 class KaTikaAstronomy:
     def __init__(self):
-        # Anchor: 19 Juli 2020 (Titik Nol)
+        # Konfigurasi Lokasi (Denpasar)
         self.location = LocationInfo("Denpasar", "Indonesia", "Asia/Makassar", -8.6705, 115.2126)
         self.tz = pytz.timezone("Asia/Makassar")
+        
+        # ANCHOR: 19 Juli 2020
+        # Dianggap dimulai saat Matahari Terbit pada tanggal tersebut.
         self.anchor_date = datetime.date(2020, 7, 19)
 
     def get_heartbeat(self, check_time):
         """
-        Mengirimkan Sinyal Detak (Signal) yang mewakili 'Dina Jantung'.
-        Tidak ada hitungan kalender di sini, murni fisika waktu.
+        Menghitung Sinyal berdasarkan posisi Matahari.
+        - Sebelum Sunrise = Hari Kemarin (Signal - 1)
+        - Setelah Sunrise = Hari Ini (Signal Normal)
         """
-        # Normalisasi Waktu
+        # 1. Normalisasi Waktu
         if check_time.tzinfo is None: check_time = self.tz.localize(check_time)
         else: check_time = check_time.astimezone(self.tz)
-        current_date = check_time.date()
         
-        # 1. GENERATE SINYAL (Dina Jantung)
-        # Sinyal ini adalah data mentah yang akan dikonsumsi Modul Sasih & Wewaran
-        signal = (current_date - self.anchor_date).days
+        target_date = check_time.date()
         
-        # 2. POSISI MATAHARI
-        day_of_year = current_date.timetuple().tm_yday
-        declination = 23.45 * math.sin(math.radians(360/365 * (284 + day_of_year)))
-        posisi_ls = f"{abs(round(declination, 2))}° {'LU' if declination > 0 else 'LS'}"
+        # 2. HITUNG DATA MATAHARI (ASTRONOMIS)
+        # Menggunakan library 'astral' untuk menghitung waktu presisi di Denpasar
+        try:
+            s_data = sun(self.location.observer, date=target_date, tzinfo=self.tz)
+            sunrise = s_data['sunrise']
+            sunset = s_data['sunset']
+        except:
+            # Fallback jika library astral error (jarang terjadi)
+            sunrise = check_time.replace(hour=6, minute=0, second=0)
+            sunset = check_time.replace(hour=18, minute=30, second=0)
+        
+        # 3. TENTUKAN SINYAL (HEARTBEAT)
+        # Sinyal dasar (selisih hari kalender Masehi)
+        base_signal = (target_date - self.anchor_date).days
+        
+        # Koreksi Sinyal berdasarkan Matahari Terbit (Dau)
+        # Dalam Wariga, hari baru dimulai saat Terbit Fajar.
+        if check_time < sunrise:
+            # Jika belum terbit, ikut hitungan hari kemarin
+            final_signal = base_signal - 1
+            status_waktu = "WENGI (Sebelum Fajar)"
+        elif check_time >= sunrise and check_time < sunset:
+            # Jika sudah terbit dan belum terbenam
+            final_signal = base_signal
+            status_waktu = "RAHINA (Siang)"
+        else:
+            # Jika sudah terbenam (Malam hari tapi masih tanggal yang sama)
+            final_signal = base_signal
+            status_waktu = "WENGI (Malam)"
+
+        # 4. TENTUKAN SIKLUS (Ganjil/Genap)
+        cycle_type = "GENAP" if final_signal % 2 == 0 else "GANJIL"
 
         return {
-            "signal": signal,           # Sinyal Utama
-            "solar_pos": posisi_ls,     # Data Astronomi
-            "tgl_obj": current_date     # Objek Tanggal
+            "signal": final_signal,         # Integer Sinyal (Kunci Modul Lain)
+            "cycle_type": cycle_type,       # Info Ganjil/Genap
+            "sunrise": sunrise,             # Waktu Terbit
+            "sunset": sunset,               # Waktu Terbenam
+            "phase": status_waktu,          # Info Visual (Pagi/Siang/Malam)
+            "tgl_obj": target_date          # Tanggal Masehi
         }
 
 # ==========================================
@@ -52,6 +84,7 @@ class KaTikaCalendar:
 
     def get_calendar(self, signal):
         # Menerima Sinyal -> Terjemahkan ke Wuku
+        # Modulo 30 wuku
         idx_wuku = (signal // 7) % 30
         return {
             "sapta": self.sapta[signal % 7],
@@ -65,7 +98,7 @@ class KaTikaCalendar:
 # ==========================================
 class KaTikaWewaran:
     def __init__(self):
-        # Database Wewaran Lengkap
+        # Database Wewaran
         self.eka_wara = ["Luang", "Tungle"]
         self.dwi_wara = ["Menga", "Pepet"]
         self.tri_wara = ["Pasah", "Beteng", "Kajeng"]
@@ -85,7 +118,7 @@ class KaTikaWewaran:
         self.lintang_map = {(0,0): ("Kala Sungsang", "Rejeki"), (5,4): ("Udang", "Ulet")}
 
     def get_wewaran_lengkap(self, signal):
-        # Menerima Sinyal -> Hitung Modulo
+        # Menerima Sinyal Integer -> Hitung Modulo
         idx_tri = signal % 3
         idx_catur = signal % 4
         idx_panca = (1 + signal) % 5
@@ -117,6 +150,7 @@ class KaTikaWewaran:
 # ==========================================
 class KaTikaSasih:
     def __init__(self):
+        # Siklus 420 Hari (12 Sasih x 35 Hari)
         self.nama_sasih = [
             "Kasa", "Karo", "Katiga", "Kapat", "Kalima", "Kanem",      
             "Kapitu", "Kaulu", "Kasanga", "Kadasa", "Jiyestha", "Sada" 
@@ -129,12 +163,13 @@ class KaTikaSasih:
         """
         
         # 1. HITUNG NAMA SASIH (Siklus 420 Hari)
+        # Sinyal dari Jantung menentukan kita ada di hari keberapa dalam tahun Saka
         posisi_tahun = signal % 420
         sasih_idx = posisi_tahun // 35
         
         # 2. HITUNG DINA & FASE BULAN (Dari Dina Jantung)
-        # Di sini Sasih menerjemahkan 'Sinyal Jantung' menjadi 'Dina Global'
-        dina_global = (signal // 3) + 1  # Konversi Sinyal -> Dina
+        # Di sini Sasih menerjemahkan 'Sinyal Jantung' menjadi 'Dina Global' (Siklus 3 harian)
+        dina_global = (signal // 3) + 1 
         
         local_pos = ((dina_global - 1) % 14) + 1
         status = "PURNAMA" if 6 <= local_pos <= 10 else "TILEM" if local_pos <= 5 else "PANGLONG"
@@ -190,10 +225,9 @@ class KaTikaPadewasan:
 
     def find_dewasa_yearly(self, category, start_date, sub_category=None):
         results = []
-        # Generate Sinyal Awal
+        # Gunakan Sinyal Dasar (Hari Kalender Masehi) untuk scan ke depan
         start_signal = (start_date - self.astro.anchor_date).days
         
-        # Loop 1 Tahun
         for i in range(1, 366):
             target_signal = start_signal + i
             target_date = start_date + datetime.timedelta(days=i)
@@ -203,25 +237,29 @@ class KaTikaPadewasan:
             wuku_idx = c['wuku_index']; idx_ingkel = wuku_idx % 6
             is_good = False; label = ""; alasan = ""
             
-            # LOGIKA FILTER (Sesuai Kesepakatan)
+            # 1. NIKAH
             if category == "nikah":
                 if not self.is_uncal_balung(wuku_idx, w['sapta_idx']) and idx_ingkel != 0:
                     score = 0
                     if w['tri'] == "Beteng": score += 1
                     if w['panca_idx'] == 4: score += 1
                     if score >= 2: is_good = True; label = "✅ BAIK"; alasan = "Energi menyatukan"
+            # 2. BANGUN
             elif category == "bangun":
                 if not self.is_uncal_balung(wuku_idx, w['sapta_idx']) and not self.is_kala_gotongan(wuku_idx, w['sapta_idx']):
                     if idx_ingkel not in [0, 4]:
                         if w['tri'] == "Beteng": is_good = True; label = "🏗️ UTAMA"; alasan = "Pondasi Kuat"
                         elif w['sapta_idx'] == 6: is_good = True; label = "✅ BAIK"; alasan = "Elemen Benda Mati"
+            # 3. USAHA
             elif category == "usaha":
                 if self.get_usaha_match(sub_category, w['sapta_idx']):
                     if w['tri'] != "Kajeng": is_good=True; label="✅ COCOK"; alasan=f"Elemen {c['sapta']} selaras"
+            # 4. TANI
             elif category == "tani":
                 if idx_ingkel not in [4, 5]: 
                     if w['sapta_idx'] == 1: is_good=True; label="✅ BAIK (UMBI)"; alasan="Soma (Bulan)"
                     elif w['sapta_idx'] == 6: is_good=True; label="✅ BAIK (GANTUNG)"; alasan="Saniscara"
+            # 5. LAUT
             elif category == "laut":
                 if idx_ingkel != 2: 
                     if w['tri'] == "Pasah": is_good=True; label="🌟 UTAMA"; alasan="Pasah (Arus Lancar)"
@@ -232,20 +270,19 @@ class KaTikaPadewasan:
         return results
 
 # ==========================================
-# 6. MODUL WRAPPER (SINKRONISASI SINYAL)
+# 6. MODUL WRAPPER (SINKRONISASI SIGNAL)
 # ==========================================
 class KaTikaPencarian:
     def __init__(self, astro, cal, wew, sas):
         self.astro = astro; self.cal = cal; self.wew = wew; self.sas = sas
     
     def analisis_tanggal(self, target_date):
-        # 1. Generate Sinyal Lokal
+        # 1. Generate Sinyal Dasar (Asumsi jam 12 siang/Rahina)
         signal = (target_date - self.astro.anchor_date).days
         
         # 2. Distribusi Sinyal
         c = self.cal.get_calendar(signal)
         w = self.wew.get_wewaran_lengkap(signal)
-        # Sinyal masuk ke Sasih
         s = self.sas.get_sasih_info(signal, c['wuku_index'])
         
         return {
@@ -260,13 +297,10 @@ class KaTikaOtonan:
         self.astro = astro; self.cal = cal; self.wew = wew; self.sas = sas
     
     def hitung(self, tgl):
-        # 1. Generate Sinyal
         signal = (tgl - self.astro.anchor_date).days
         
-        # 2. Distribusi Sinyal
         c = self.cal.get_calendar(signal)
         w = self.wew.get_wewaran_lengkap(signal)
-        # Sinyal masuk ke Sasih
         s = self.sas.get_sasih_info(signal, c['wuku_index'])
         
         hari_ini = datetime.date.today(); sisa = 210 - ((hari_ini - tgl).days % 210)
@@ -276,39 +310,6 @@ class KaTikaOtonan:
             "watak_hari": w['watak_sapta'], "watak_pasar": w['watak_panca'],
             "sasih": s['sasih_label'], "next_otonan": hari_ini + datetime.timedelta(days=sisa)
         }
-
-# ==========================================
-# 7. MAIN EXECUTION & WIRING
-# ==========================================
-# Init All Engines
-astro = KaTikaAstronomy()
-cal = KaTikaCalendar()
-wew = KaTikaWewaran()
-sas = KaTikaSasih()
-rai = KaTikaRainan()
-dew = KaTikaPadewasan(cal, wew, astro)
-oto = KaTikaOtonan(astro, cal, wew, sas)
-search_engine = KaTikaPencarian(astro, cal, wew, sas)
-
-# 1. FETCH HEARTBEAT (Dina Jantung)
-t_now = datetime.datetime.now(astro.tz)
-heart = astro.get_heartbeat(t_now) # Output: heart['signal']
-
-# 2. DISTRIBUSI SINYAL KE MODUL LAIN
-c_d = cal.get_calendar(heart['signal'])
-w_d = wew.get_wewaran_lengkap(heart['signal'])
-
-# 3. KONEKSI PENTING: JANTUNG -> SASIH
-# Sasih menerima signal jantung untuk hitung Dina & Fase Bulan
-s_d = sas.get_sasih_info(heart['signal'], c_d['wuku_index'])
-
-# 4. Helper (Hitung Rentang Tanggal)
-urutan_tri = (heart['signal'] % 3) + 1
-start_date = heart['tgl_obj'] - datetime.timedelta(days=(urutan_tri - 1))
-range_text = f"{start_date.strftime('%d %b')} - {(start_date + datetime.timedelta(days=2)).strftime('%d %b %Y')}"
-
-# Cek Rainan
-rains = rai.get_rainan(c_d['wuku_index'], w_d['sapta_idx'], w_d['panca_idx'], w_d['tri'])
 
 # ==========================================
 # 8. RENDER UI (MOBILE OPTIMIZED)
@@ -341,12 +342,23 @@ st.markdown(f'<div class="tri-panca">{w_d["tri"]} — {c_d["panca"]}</div>', uns
 st.markdown(f'<div class="sapta-wara">{c_d["sapta"].upper()}</div>', unsafe_allow_html=True)
 st.markdown(f'<div style="text-align:center; color:#bfa15f; font-size:12px; font-style:italic;">{range_text}</div>', unsafe_allow_html=True)
 
-# Widgets
+# Widgets (Update: Menampilkan Data Astronomis)
 st.markdown(f"""
 <div class="widget-container">
-    <div class="widget-box"><div style="font-size:24px">🌙</div><div class="widget-val">{s_d["status"]}</div></div>
-    <div class="widget-box"><div style="font-size:24px">☀️</div><div class="widget-val">{heart["solar_pos"]}</div></div>
-    <div class="widget-box"><div style="font-size:24px">📅</div><div class="widget-val">{s_d["sasih_label"]}</div></div>
+    <div class="widget-box">
+        <div style="font-size:20px">🌅</div>
+        <div class="widget-val">Terbit</div>
+        <div style="font-size:11px; color:#bfa15f;">{heart['sunrise'].strftime('%H:%M')}</div>
+    </div>
+    <div class="widget-box">
+        <div style="font-size:24px; color:#fff; font-weight:bold;">{heart['cycle_type']}</div>
+        <div style="font-size:10px; color:#888;">{heart['phase']}</div>
+    </div>
+    <div class="widget-box">
+        <div style="font-size:20px">🌇</div>
+        <div class="widget-val">Terbenam</div>
+        <div style="font-size:11px; color:#bfa15f;">{heart['sunset'].strftime('%H:%M')}</div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -359,7 +371,7 @@ with tab_h:
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
     c1.metric("Wuku", c_d['wuku']); c2.metric("Urip", w_d['total_urip']); c3.metric("Dina", f"Ke-{s_d['dina_lokal']}")
-    st.info(f"**Posisi Sasih:** {s_d['status_wariga']}")
+    st.info(f"**Posisi Sasih:** {s_d['status_wariga']} | {s_d['sasih_label']}")
 
 # Tab 2: Pencarian
 with tab_s:
