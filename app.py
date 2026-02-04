@@ -1,414 +1,466 @@
 import streamlit as st
-import datetime
 import pytz
-import calendar
-import math
+import pandas as pd
+from datetime import datetime, date, time, timedelta
 from astral import LocationInfo
 from astral.sun import sun
 
 # ==========================================
-# 1. MODUL JANTUNG (ASTRONOMIS - SUNRISE TRIGGER)
+# 1. MODUL JANTUNG (PULSE)
 # ==========================================
-class KaTikaAstronomy:
+class KaTikaPulse:
     def __init__(self):
-        # Konfigurasi Lokasi (Denpasar)
-        self.location = LocationInfo("Denpasar", "Indonesia", "Asia/Makassar", -8.6705, 115.2126)
-        self.tz = pytz.timezone("Asia/Makassar")
-        
-        # ANCHOR: 19 Juli 2020
-        # Dianggap dimulai saat Matahari Terbit pada tanggal tersebut.
-        self.anchor_date = datetime.date(2020, 7, 19)
+        self.timezone = pytz.timezone('Asia/Makassar')
+        # Lokasi: Denpasar, Bali
+        self.location = LocationInfo("Denpasar", "Bali", "Asia/Makassar", -8.6705, 115.2126)
+        # Anchor Date: 19 Juli 2020 (Titik Nol)
+        self.anchor_date = date(2020, 7, 19)
 
-    def get_heartbeat(self, check_time):
-        """
-        Menghitung Sinyal berdasarkan posisi Matahari.
-        - Sebelum Sunrise = Hari Kemarin (Signal - 1)
-        - Setelah Sunrise = Hari Ini (Signal Normal)
-        """
-        # 1. Normalisasi Waktu
-        if check_time.tzinfo is None: check_time = self.tz.localize(check_time)
-        else: check_time = check_time.astimezone(self.tz)
-        
-        target_date = check_time.date()
-        
-        # 2. HITUNG DATA MATAHARI (ASTRONOMIS)
-        # Menggunakan library 'astral' untuk menghitung waktu presisi di Denpasar
-        try:
-            s_data = sun(self.location.observer, date=target_date, tzinfo=self.tz)
-            sunrise = s_data['sunrise']
-            sunset = s_data['sunset']
-        except:
-            # Fallback jika library astral error (jarang terjadi)
-            sunrise = check_time.replace(hour=6, minute=0, second=0)
-            sunset = check_time.replace(hour=18, minute=30, second=0)
-        
-        # 3. TENTUKAN SINYAL (HEARTBEAT)
-        # Sinyal dasar (selisih hari kalender Masehi)
-        base_signal = (target_date - self.anchor_date).days
-        
-        # Koreksi Sinyal berdasarkan Matahari Terbit (Dau)
-        # Dalam Wariga, hari baru dimulai saat Terbit Fajar.
-        if check_time < sunrise:
-            # Jika belum terbit, ikut hitungan hari kemarin
-            final_signal = base_signal - 1
-            status_waktu = "WENGI (Sebelum Fajar)"
-        elif check_time >= sunrise and check_time < sunset:
-            # Jika sudah terbit dan belum terbenam
-            final_signal = base_signal
-            status_waktu = "RAHINA (Siang)"
+    def get_heartbeat(self, check_time: datetime) -> dict:
+        # Normalisasi Timezone
+        if check_time.tzinfo is None:
+            check_time = self.timezone.localize(check_time)
         else:
-            # Jika sudah terbenam (Malam hari tapi masih tanggal yang sama)
+            check_time = check_time.astimezone(self.timezone)
+
+        # Hitung Data Matahari
+        s_data = sun(self.location.observer, date=check_time.date(), tzinfo=self.timezone)
+        sunrise, sunset = s_data['sunrise'], s_data['sunset']
+        
+        # Hitung Signal Dasar
+        delta = check_time.date() - self.anchor_date
+        base_signal = delta.days
+        
+        # Logika Pergantian Dina (CRITICAL)
+        if check_time < sunrise:
+            final_signal = base_signal - 1
+            phase = "WENGI (Sebelum Fajar)"
+        else:
             final_signal = base_signal
-            status_waktu = "WENGI (Malam)"
-
-        # 4. TENTUKAN SIKLUS (Ganjil/Genap)
-        cycle_type = "GENAP" if final_signal % 2 == 0 else "GANJIL"
-
+            phase = "RAHINA" if check_time < sunset else "WENGI"
+            
         return {
-            "signal": final_signal,         # Integer Sinyal (Kunci Modul Lain)
-            "cycle_type": cycle_type,       # Info Ganjil/Genap
-            "sunrise": sunrise,             # Waktu Terbit
-            "sunset": sunset,               # Waktu Terbenam
-            "phase": status_waktu,          # Info Visual (Pagi/Siang/Malam)
-            "tgl_obj": target_date          # Tanggal Masehi
+            "signal": final_signal,
+            "sunrise": sunrise,
+            "sunset": sunset,
+            "phase": phase
         }
 
 # ==========================================
-# 2. MODUL KALENDER (WUKU)
-# ==========================================
-class KaTikaCalendar:
-    def __init__(self):
-        self.sapta = ["Redite", "Soma", "Anggara", "Buda", "Wraspati", "Sukra", "Saniscara"]
-        self.panca = ["Umanis", "Paing", "Pon", "Wage", "Kliwon"]
-        self.wuku_list = ["Sinta", "Landep", "Ukir", "Kulantir", "Tolu", "Gumbreg", "Wariga", "Warigadean", "Julungwangi", "Sungsang", "Dungulan", "Kuningan", "Langkir", "Medangsia", "Pujut", "Pahang", "Krulut", "Merakih", "Tambir", "Medangkungan", "Matal", "Uye", "Menail", "Prangbakat", "Bala", "Ugu", "Wayang", "Klawu", "Dukut", "Watugunung"]
-
-    def get_calendar(self, signal):
-        # Menerima Sinyal -> Terjemahkan ke Wuku
-        # Modulo 30 wuku
-        idx_wuku = (signal // 7) % 30
-        return {
-            "sapta": self.sapta[signal % 7],
-            "panca": self.panca[(1 + signal) % 5],
-            "wuku": self.wuku_list[idx_wuku],
-            "wuku_index": idx_wuku
-        }
-
-# ==========================================
-# 3. MODUL WEWARAN (RESET OTOMATIS)
+# 2. MODUL WEWARAN (CUSTOM + WATAK)
 # ==========================================
 class KaTikaWewaran:
     def __init__(self):
-        # Database Wewaran
-        self.eka_wara = ["Luang", "Tungle"]
-        self.dwi_wara = ["Menga", "Pepet"]
-        self.tri_wara = ["Pasah", "Beteng", "Kajeng"]
-        self.catur_wara = ["Sri", "Laba", "Jaya", "Menala"]
-        self.panca_wara = ["Umanis", "Paing", "Pon", "Wage", "Kliwon"]
-        self.sad_wara = ["Tungleh", "Aryang", "Urukung", "Paniron", "Was", "Maulu"]
-        self.sapta_wara = ["Redite", "Soma", "Anggara", "Buda", "Wraspati", "Sukra", "Saniscara"]
-        self.asta_wara = ["Sri", "Indra", "Guru", "Yama", "Ludra", "Brahma", "Kala", "Uma"]
-        self.sanga_wara = ["Dangu", "Jangur", "Gigis", "Nohan", "Ogan", "Erangan", "Urungan", "Tulus", "Dadi"]
-        self.dasa_wara = ["Pandita", "Pati", "Suka", "Duka", "Sri", "Manuh", "Manusa", "Raja", "Dewa", "Raksasa"]
-
-        self.urip_sapta = [5, 4, 3, 7, 8, 6, 9] 
-        self.urip_panca = [5, 9, 7, 4, 8]
+        # Tri Wara (Custom 4 Siklus: Ada 2 Pasah)
+        self.TRI_WARA = ['Kajeng', 'Pasah', 'Beteng', 'Pasah']
         
-        self.watak_sapta = ["Redite: Pemimpin", "Soma: Lembut", "Anggara: Pemberani", "Buda: Sabar", "Wraspati: Bijaksana", "Sukra: Romantis", "Saniscara: Teguh"]
-        self.watak_panca = ["Umanis: Penyayang", "Paing: Rajin", "Pon: Bijaksana", "Wage: Setia", "Kliwon: Spiritual"]
-        self.lintang_map = {(0,0): ("Kala Sungsang", "Rejeki"), (5,4): ("Udang", "Ulet")}
-
-    def get_wewaran_lengkap(self, signal):
-        # Menerima Sinyal Integer -> Hitung Modulo
-        idx_tri = signal % 3
-        idx_catur = signal % 4
-        idx_panca = (1 + signal) % 5
-        idx_sad = signal % 6
-        idx_sapta = signal % 7
-        idx_asta = signal % 8
-        idx_sanga = signal % 9
+        self.CATUR_WARA = ['Sri', 'Laba', 'Jaya', 'Menala']
         
-        total_urip = self.urip_sapta[idx_sapta] + self.urip_panca[idx_panca]
-        idx_eka = 0 if (total_urip % 2) != 0 else 1
-        idx_dwi = 1 if idx_eka == 0 else 0
-        idx_dasa = (total_urip + 1) % 10 
-        idx_dasa_final = 9 if idx_dasa == 0 else (idx_dasa - 1)
+        # Panca Wara (Start Paing)
+        self.PANCA_WARA = ['Paing', 'Pon', 'Wage', 'Kliwon', 'Umanis']
+        self.URIP_PANCA = [9, 7, 4, 8, 5]
+        
+        self.SAD_WARA = ['Tungleh', 'Aryang', 'Urukung', 'Paniron', 'Was', 'Maulu']
+        
+        self.SAPTA_WARA = ['Redite', 'Soma', 'Anggara', 'Buda', 'Wraspati', 'Sukra', 'Saniscara']
+        self.URIP_SAPTA = [5, 4, 3, 7, 8, 6, 9]
+        
+        self.ASTA_WARA = ['Sri', 'Indra', 'Guru', 'Yama', 'Ludra', 'Brahma', 'Kala', 'Uma']
+        self.SANGA_WARA = ['Dangu', 'Jangur', 'Gigis', 'Nohan', 'Ogan', 'Erangan', 'Urungan', 'Tulus', 'Dadi']
+        self.DASA_WARA = ['Pandita', 'Pati', 'Suka', 'Duka', 'Sri', 'Manuh', 'Manusa', 'Raja', 'Dewa', 'Raksasa']
 
-        lintang = self.lintang_map.get((idx_sapta, idx_panca), ("Lumbung", "Hidup Sederhana"))
+        # Database Lintang / Watak (Sample)
+        self.DATA_LINTANG = {
+            (0, 0): {"nama": "Kukus", "sifat": "Keras hati, cemburu, penyayang."},
+            (0, 4): {"nama": "Kala Sungsang", "sifat": "Pemberani, suka bicara, mudah tersinggung."},
+            (1, 1): {"nama": "Lembu", "sifat": "Pendiam, cerdas, setia."},
+            # ... (Tambahkan sisa kombinasi 35 weton di sini)
+        }
+        self.DEFAULT_WATAK = {"nama": "Belum Terdata", "sifat": "Data pustaka sedang dilengkapi."}
+
+    def get_wewaran_lengkap(self, signal: int) -> dict:
+        tri = self.TRI_WARA[signal % 4]
+        catur = self.CATUR_WARA[signal % 4]
+        
+        panca_idx = signal % 5
+        panca = self.PANCA_WARA[panca_idx]
+        urip_panca = self.URIP_PANCA[panca_idx]
+        
+        sad = self.SAD_WARA[signal % 6]
+        
+        sapta_idx = signal % 7
+        sapta = self.SAPTA_WARA[sapta_idx]
+        urip_sapta = self.URIP_SAPTA[sapta_idx]
+        
+        asta = self.ASTA_WARA[signal % 8]
+        sanga = self.SANGA_WARA[signal % 9]
+        
+        total_urip = urip_sapta + urip_panca
+        dasa = self.DASA_WARA[(total_urip + 1) % 10]
+        
+        # Ambil Watak
+        watak = self.DATA_LINTANG.get((sapta_idx, panca_idx), self.DEFAULT_WATAK)
         
         return {
-            "tri": self.tri_wara[idx_tri], "catur": self.catur_wara[idx_catur],
-            "panca": self.panca_wara[idx_panca], "sad": self.sad_wara[idx_sad],
-            "sapta": self.sapta_wara[idx_sapta], "asta": self.asta_wara[idx_asta],
-            "sanga": self.sanga_wara[idx_sanga], "dasa": self.dasa_wara[idx_dasa_final],
-            "sapta_idx": idx_sapta, "panca_idx": idx_panca, "total_urip": total_urip,
-            "watak_sapta": self.watak_sapta[idx_sapta], "watak_panca": self.watak_panca[idx_panca],
-            "lintang_nama": lintang[0], "lintang_watak": lintang[1]
+            "tri": tri, "catur": catur, "panca": panca, "sad": sad,
+            "sapta": sapta, "asta": asta, "sanga": sanga, "dasa": dasa,
+            "total_urip": total_urip,
+            "lintang_nama": watak['nama'],
+            "lintang_sifat": watak['sifat']
         }
 
 # ==========================================
-# 4. MODUL SASIH (TERHUBUNG KE DINA JANTUNG)
+# 3. MODUL KALENDER (SSOT)
+# ==========================================
+class KaTikaCalendar:
+    def __init__(self):
+        self.WUKU = ["Sinta", "Landep", "Ukir", "Kulantir", "Tolu", "Gumbreg",
+                     "Wariga", "Warigadean", "Julungwangi", "Sungsang", "Dungulan", "Kuningan",
+                     "Langkir", "Medangsia", "Pujut", "Pahang", "Krulut", "Merakih",
+                     "Tambir", "Medangkungan", "Matal", "Uye", "Menail", "Prangbakat",
+                     "Bala", "Ugu", "Wayang", "Klawu", "Dukut", "Watugunung"]
+        self.INGKEL = ["Wong", "Sato", "Mina", "Manuk", "Taru", "Buku"]
+
+    def get_calendar(self, signal: int, wew_data: dict) -> dict:
+        wuku_idx = (signal // 7) % 30
+        return {
+            "wuku_name": self.WUKU[wuku_idx],
+            "wuku_index": wuku_idx,
+            "ingkel_name": self.INGKEL[wuku_idx % 6],
+            "full_label": f"{wew_data['sapta']} {wew_data['panca']} {self.WUKU[wuku_idx]}"
+        }
+
+# ==========================================
+# 4. MODUL SASIH (420 HARI)
 # ==========================================
 class KaTikaSasih:
     def __init__(self):
-        # Siklus 420 Hari (12 Sasih x 35 Hari)
-        self.nama_sasih = [
-            "Kasa", "Karo", "Katiga", "Kapat", "Kalima", "Kanem",      
-            "Kapitu", "Kaulu", "Kasanga", "Kadasa", "Jiyestha", "Sada" 
-        ]
-
-    def get_sasih_info(self, signal, wuku_idx):
-        """
-        signal: Data mentah dari Modul Jantung (KaTikaAstronomy).
-        wuku_idx: Data dari Modul Kalender.
-        """
+        self.SASIH = ["Kasa", "Karo", "Katiga", "Kapat", "Kalima", "Kanem",
+                      "Kapitu", "Kaulu", "Kasanga", "Kadasa", "Jyestha", "Sada"]
+    
+    def get_sasih_info(self, signal: int) -> dict:
+        cycle_pos = signal % 420
+        sasih_idx = cycle_pos // 35
+        day_sasih = (cycle_pos % 35) + 1
         
-        # 1. HITUNG NAMA SASIH (Siklus 420 Hari)
-        # Sinyal dari Jantung menentukan kita ada di hari keberapa dalam tahun Saka
-        posisi_tahun = signal % 420
-        sasih_idx = posisi_tahun // 35
+        status = "PANGALANTAKA"
+        is_purnama, is_tilem = False, False
         
-        # 2. HITUNG DINA & FASE BULAN (Dari Dina Jantung)
-        # Di sini Sasih menerjemahkan 'Sinyal Jantung' menjadi 'Dina Global' (Siklus 3 harian)
-        dina_global = (signal // 3) + 1 
-        
-        local_pos = ((dina_global - 1) % 14) + 1
-        status = "PURNAMA" if 6 <= local_pos <= 10 else "TILEM" if local_pos <= 5 else "PANGLONG"
-        
-        # 3. STATUS WARIGA
-        status_wariga = "TUNGGAK (Utama)" if (wuku_idx % 3) != 2 else "NAMPIH"
-        
+        # Logika Custom Gelap/Terang
+        if sasih_idx % 2 == 0: # Index Genap (Kasa, Katiga...) -> Pola Gelap
+            if day_sasih == 18: status, is_purnama = "PURNAMA", True
+            elif day_sasih in [1, 35]: status, is_tilem = "TILEM", True
+            elif 1 < day_sasih < 18: status = "PENANGGAL"
+            else: status = "PANGLONG"
+        else: # Index Ganjil (Karo, Kapat...) -> Pola Terang
+            if day_sasih in [1, 35]: status, is_purnama = "PURNAMA", True
+            elif day_sasih == 18: status, is_tilem = "TILEM", True
+            elif 1 < day_sasih < 18: status = "PANGLONG"
+            else: status = "PENANGGAL"
+            
         return {
-            "sasih_label": self.nama_sasih[sasih_idx],
-            "status": status,
-            "dina_lokal": local_pos,
-            "status_wariga": status_wariga
+            "sasih_name": self.SASIH[sasih_idx], 
+            "status_bulan": status, 
+            "is_purnama": is_purnama, 
+            "is_tilem": is_tilem
         }
 
-class KaTikaRainan:
-    def get_rainan(self, wuku_idx, sapta_idx, panca_idx, tri_nama):
-        res = []
-        if wuku_idx == 10 and sapta_idx == 3 and panca_idx == 4: res.append("🌟 GALUNGAN")
-        if wuku_idx == 11 and sapta_idx == 6 and panca_idx == 4: res.append("🌟 KUNINGAN")
-        if wuku_idx == 15 and sapta_idx == 3 and panca_idx == 4: res.append("🔒 PEGATWAKAN")
-        if wuku_idx == 29 and sapta_idx == 6 and panca_idx == 0: res.append("📚 SARASWATI")
-        if wuku_idx == 0 and sapta_idx == 3 and panca_idx == 4: res.append("🌟 PAGERWESI")
-        if sapta_idx == 6 and panca_idx == 4: res.append("🔔 TUMPEK")
-        if tri_nama == "Kajeng" and panca_idx == 4: res.append("👻 KAJENG KLIWON")
-        return res
-
 # ==========================================
-# 5. MODUL PADEWASAN (5 KATEGORI)
+# 5. MODUL PADEWASAN (8 KATEGORI + RULE WARIGA)
 # ==========================================
 class KaTikaPadewasan:
-    def __init__(self, cal, wew, astro):
-        self.cal = cal; self.wew = wew; self.astro = astro
-        self.hari_indo = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-        self.bulan_indo = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+    def __init__(self, cal, wew, sas, astro):
+        self.cal, self.wew, self.sas, self.astro = cal, wew, sas, astro
+        self.CATEGORIES = [
+            "Pernikahan (Wiwaha)", "Membangun (Wisma)", "Pertanian (Tanam Tuwuh)", 
+            "Peternakan (Wewalungan)", "Perabotan (Pande/Alat)", 
+            "Ekonomi (Dagang)", "Melaut (Mina)", "Upacara (Yadnya)"
+        ]
 
-    def is_uncal_balung(self, wuku_idx, sapta_idx):
-        if wuku_idx < 10 or wuku_idx > 15: return False
-        if wuku_idx == 10 and sapta_idx < 3: return False 
-        if wuku_idx == 15 and sapta_idx > 3: return False 
-        return True
+    def _is_uncal_balung(self, wuku_idx): return 10 <= wuku_idx <= 15
+    def _is_rangda_tiga(self, wuku_idx): return wuku_idx in [6, 7, 14, 15, 22, 23]
+    def _is_kala_gotongan(self, sapta, panca): return sapta == "Saniscara" and panca == "Paing"
 
-    def is_kala_gotongan(self, wuku_idx, sapta_idx):
-        return wuku_idx in [6, 7] and sapta_idx in [1, 4]
+    def _format_date_ranges(self, date_list):
+        if not date_list: return ""
+        sorted_dates = sorted(list(set(date_list)))
+        ranges = []
+        if not sorted_dates: return ""
+        start, end = sorted_dates[0], sorted_dates[0]
+        bln = ["", "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"]
+        for i in range(1, len(sorted_dates)):
+            curr = sorted_dates[i]
+            if (curr - end).days == 1: end = curr
+            else:
+                ranges.append(self._str(start, end, bln))
+                start, end = curr, curr
+        ranges.append(self._str(start, end, bln))
+        return ", ".join(ranges)
 
-    def get_usaha_match(self, jenis_usaha, sapta_idx):
-        map_usaha = {
-            "Emas, Perhiasan": [0], "Sayur, Minuman": [1], "Besi, Elektronik": [2],
-            "Sembako, Umum": [3], "Pakaian, Buku": [4], "Kosmetik, Seni": [5], "Properti, Bangunan": [6]
+    def _str(self, start, end, bln):
+        if start == end: return f"{start.day} {bln[start.month]} {start.year}"
+        elif start.month == end.month: return f"{start.day}-{end.day} {bln[start.month]} {start.year}"
+        else: return f"{start.day} {bln[start.month]} - {end.day} {bln[end.month]} {end.year}"
+
+    def cari_dewasa_ayu(self) -> list:
+        start_date = datetime.now(self.astro.timezone) + timedelta(days=1)
+        start_date = start_date.replace(hour=12, minute=0, second=0, microsecond=0)
+        raw_results = {cat: [] for cat in self.CATEGORIES}
+
+        # Scanner 365 Hari
+        for i in range(365):
+            curr_date = start_date + timedelta(days=i)
+            pulse = self.astro.get_heartbeat(curr_date)
+            wew = self.wew.get_wewaran_lengkap(pulse['signal'])
+            cal = self.cal.get_calendar(pulse['signal'], wew)
+            sas = self.sas.get_sasih_info(pulse['signal'])
+
+            # Variables
+            sapta, panca, tri = wew['sapta'], wew['panca'], wew['tri']
+            wuku_idx, ingkel = cal['wuku_index'], cal['ingkel_name']
+            
+            # Filter Negatif
+            is_uncal = self._is_uncal_balung(wuku_idx)
+            is_rangda = self._is_rangda_tiga(wuku_idx)
+            is_kala = self._is_kala_gotongan(sapta, panca)
+
+            # --- RULE ENGINE WARIGA ---
+            
+            # 1. Pernikahan (No Uncal, No Rangda Tiga, No Ingkel Wong)
+            if not is_uncal and not is_rangda and not is_kala and ingkel != 'Wong':
+                if sapta in ['Wraspati', 'Sukra'] and panca in ['Umanis', 'Kliwon']:
+                    raw_results["Pernikahan (Wiwaha)"].append(curr_date.date())
+
+            # 2. Membangun (No Kala Gotongan, No Ingkel Taru)
+            if not is_kala and ingkel != 'Taru':
+                if sapta == 'Saniscara' or (sapta == 'Wraspati' and panca == 'Pon'):
+                    raw_results["Membangun (Wisma)"].append(curr_date.date())
+
+            # 3. Pertanian (Tanam Tuwuh)
+            if not is_kala and ingkel not in ['Taru', 'Buku'] and sapta in ['Soma', 'Wraspati', 'Sukra']:
+                raw_results["Pertanian (Tanam Tuwuh)"].append(curr_date.date())
+
+            # 4. Peternakan (No Ingkel Sato/Mina)
+            if not is_kala and ingkel not in ['Sato', 'Mina']:
+                if sapta in ['Wraspati', 'Saniscara'] or cal['wuku_name'] == 'Uye':
+                    raw_results["Peternakan (Wewalungan)"].append(curr_date.date())
+            
+            # 5. Perabotan (Anggara/Pasah, No Ingkel Buku)
+            if not is_kala and ingkel != 'Buku' and (sapta == 'Anggara' or tri == 'Pasah'):
+                raw_results["Perabotan (Pande/Alat)"].append(curr_date.date())
+
+            # 6. Ekonomi (Pasah, Soma Pon/Buda Wage)
+            if not is_kala and tri == 'Pasah':
+                if (sapta == 'Soma' and panca == 'Pon') or (sapta == 'Buda' and panca == 'Wage') or tri == 'Pasah':
+                    raw_results["Ekonomi (Dagang)"].append(curr_date.date())
+
+            # 7. Melaut (Mina)
+            if not is_kala and ingkel != 'Mina' and (tri == 'Pasah' or sapta == 'Soma'):
+                raw_results["Melaut (Mina)"].append(curr_date.date())
+
+            # 8. Upacara (Yadnya)
+            if not is_uncal and not is_kala:
+                is_kajeng_kliwon = (tri == 'Kajeng' and panca == 'Kliwon')
+                if sas['is_purnama'] or sas['is_tilem'] or is_kajeng_kliwon:
+                    raw_results["Upacara (Yadnya)"].append(curr_date.date())
+
+        return [{"kategori": k, "Tanggal masehi": self._format_date_ranges(v), "jumlah_hari": len(v)} for k, v in raw_results.items() if v]
+
+# ==========================================
+# 6. MODUL ODALAN (DB LENGKAP)
+# ==========================================
+class KaTikaOdalan:
+    def __init__(self):
+        # Database Pawukon (Sad Kahyangan & Jajar Kemiri)
+        self.DB_PAWUKON = {
+            ('Anggara', 'Kliwon', 'Medangsia'): ["Pura Luhur Uluwatu", "Pura Taman Ayun"],
+            ('Buda', 'Wage', 'Langkir'): ["Pura Tanah Lot (Buda Cemeng)"],
+            ('Wraspati', 'Umanis', 'Dungulan'): ["Pura Luhur Batukaru"],
+            ('Saniscara', 'Kliwon', 'Dungulan'): ["Pura Lempuyang Luhur (Kuningan)"],
+            ('Saniscara', 'Kliwon', 'Wayang'): ["Pura Dasar Buana Gelgel"],
+            # Jajar Kemiri Tabanan
+            ('Saniscara', 'Kliwon', 'Wariga'): ["Pura Luhur Besikalung"],
+            ('Saniscara', 'Kliwon', 'Krulut'): ["Pura Luhur Muncak Sari"],
+            ('Buda', 'Umanis', 'Prangbakat'): ["Pura Luhur Tambawaras"],
+            ('Buda', 'Kliwon', 'Ugu'): ["Pura Luhur Petali"],
         }
-        for k, v in map_usaha.items():
-            if k.split(",")[0] in jenis_usaha: return sapta_idx in v
-        return False
-
-    def find_dewasa_yearly(self, category, start_date, sub_category=None):
+        # Database Sasih
+        self.DB_SASIH = {
+            ('Kadasa', 'PURNAMA'): ["Pura Besakih", "Pura Ulun Danu Batur", "Pura Tuluk Biyu"],
+            ('Kapat', 'PURNAMA'): ["Pura Jati Batur", "Pura Pulaki"]
+        }
+    
+    def scan_year(self, wew_mod, cal_mod, sas_mod, astro_mod):
         results = []
-        # Gunakan Sinyal Dasar (Hari Kalender Masehi) untuk scan ke depan
-        start_signal = (start_date - self.astro.anchor_date).days
+        start_date = datetime.now(astro_mod.timezone) + timedelta(days=1)
+        start_date = start_date.replace(hour=12)
         
-        for i in range(1, 366):
-            target_signal = start_signal + i
-            target_date = start_date + datetime.timedelta(days=i)
+        # Scan 365 hari
+        for i in range(365):
+            curr = start_date + timedelta(days=i)
+            pulse = astro_mod.get_heartbeat(curr)
+            wew = wew_mod.get_wewaran_lengkap(pulse['signal'])
+            cal = cal_mod.get_calendar(pulse['signal'], wew)
+            sas = sas_mod.get_sasih_info(pulse['signal'])
             
-            c = self.cal.get_calendar(target_signal)
-            w = self.wew.get_wewaran_lengkap(target_signal)
-            wuku_idx = c['wuku_index']; idx_ingkel = wuku_idx % 6
-            is_good = False; label = ""; alasan = ""
+            key_pawukon = (wew['sapta'], wew['panca'], cal['wuku_name'])
+            key_sasih = (sas['sasih_name'], sas['status_bulan'])
             
-            # 1. NIKAH
-            if category == "nikah":
-                if not self.is_uncal_balung(wuku_idx, w['sapta_idx']) and idx_ingkel != 0:
-                    score = 0
-                    if w['tri'] == "Beteng": score += 1
-                    if w['panca_idx'] == 4: score += 1
-                    if score >= 2: is_good = True; label = "✅ BAIK"; alasan = "Energi menyatukan"
-            # 2. BANGUN
-            elif category == "bangun":
-                if not self.is_uncal_balung(wuku_idx, w['sapta_idx']) and not self.is_kala_gotongan(wuku_idx, w['sapta_idx']):
-                    if idx_ingkel not in [0, 4]:
-                        if w['tri'] == "Beteng": is_good = True; label = "🏗️ UTAMA"; alasan = "Pondasi Kuat"
-                        elif w['sapta_idx'] == 6: is_good = True; label = "✅ BAIK"; alasan = "Elemen Benda Mati"
-            # 3. USAHA
-            elif category == "usaha":
-                if self.get_usaha_match(sub_category, w['sapta_idx']):
-                    if w['tri'] != "Kajeng": is_good=True; label="✅ COCOK"; alasan=f"Elemen {c['sapta']} selaras"
-            # 4. TANI
-            elif category == "tani":
-                if idx_ingkel not in [4, 5]: 
-                    if w['sapta_idx'] == 1: is_good=True; label="✅ BAIK (UMBI)"; alasan="Soma (Bulan)"
-                    elif w['sapta_idx'] == 6: is_good=True; label="✅ BAIK (GANTUNG)"; alasan="Saniscara"
-            # 5. LAUT
-            elif category == "laut":
-                if idx_ingkel != 2: 
-                    if w['tri'] == "Pasah": is_good=True; label="🌟 UTAMA"; alasan="Pasah (Arus Lancar)"
-
-            if is_good:
-                tgl_str = f"{self.hari_indo[target_date.weekday()]}, {target_date.day} {self.bulan_indo[target_date.month]} {target_date.year}"
-                results.append({"Tanggal Masehi": tgl_str, "Wuku": c['wuku'], "Wewaran": f"{c['sapta']} {c['panca']}", "Status": label, "Keterangan": alasan})
+            found = []
+            if key_pawukon in self.DB_PAWUKON: found.extend(self.DB_PAWUKON[key_pawukon])
+            if key_sasih in self.DB_SASIH: found.extend(self.DB_SASIH[key_sasih])
+            
+            if found:
+                t_pagi, t_sore = pulse['sunrise'], pulse['sunset'] - timedelta(hours=1)
+                rentang = f"{t_pagi.strftime('%H:%M')} - {t_sore.strftime('%H:%M')}"
+                for p in found:
+                    results.append({
+                        "Tanggal": curr.strftime("%d %B %Y"),
+                        "Pura": p,
+                        "Waktu": rentang
+                    })
         return results
 
 # ==========================================
-# 6. MODUL WRAPPER (SINKRONISASI SIGNAL)
+# 7. MODUL OTONAN (WRAPPER)
 # ==========================================
-class KaTikaPencarian:
-    def __init__(self, astro, cal, wew, sas):
-        self.astro = astro; self.cal = cal; self.wew = wew; self.sas = sas
-    
-    def analisis_tanggal(self, target_date):
-        # 1. Generate Sinyal Dasar (Asumsi jam 12 siang/Rahina)
-        signal = (target_date - self.astro.anchor_date).days
-        
-        # 2. Distribusi Sinyal
-        c = self.cal.get_calendar(signal)
-        w = self.wew.get_wewaran_lengkap(signal)
-        s = self.sas.get_sasih_info(signal, c['wuku_index'])
-        
-        return {
-            "tanggal_masehi": target_date.strftime("%d %B %Y"),
-            "sapta": c['sapta'], "panca": c['panca'], "wuku": c['wuku'], 
-            "sasih": s['sasih_label'], "urip": w['total_urip'], "tri": w['tri'], 
-            "fase_bulan": s['status']
-        }
-
 class KaTikaOtonan:
     def __init__(self, astro, cal, wew, sas):
-        self.astro = astro; self.cal = cal; self.wew = wew; self.sas = sas
+        self.astro, self.cal, self.wew, self.sas = astro, cal, wew, sas
     
-    def hitung(self, tgl):
-        signal = (tgl - self.astro.anchor_date).days
+    def hitung(self, tgl_lahir):
+        if isinstance(tgl_lahir, datetime): tgl_lahir_date = tgl_lahir.date()
+        else: tgl_lahir_date = tgl_lahir
         
-        c = self.cal.get_calendar(signal)
-        w = self.wew.get_wewaran_lengkap(signal)
-        s = self.sas.get_sasih_info(signal, c['wuku_index'])
+        # Normalisasi ke Jam 12 Siang
+        birth_noon = datetime.combine(tgl_lahir_date, time(12, 0, 0))
+        birth_noon = self.astro.timezone.localize(birth_noon)
+
+        pulse = self.astro.get_heartbeat(birth_noon)
+        wew = self.wew.get_wewaran_lengkap(pulse['signal'])
+        cal = self.cal.get_calendar(pulse['signal'], wew)
         
-        hari_ini = datetime.date.today(); sisa = 210 - ((hari_ini - tgl).days % 210)
+        # Next Otonan
+        now = datetime.now(self.astro.timezone).date()
+        delta = (now - tgl_lahir_date).days
+        days_until = 210 - (delta % 210)
+        if days_until == 210: days_until = 0
+        
         return {
-            "weton_text": f"{c['sapta']} {c['panca']} {c['wuku']}", 
-            "urip": w['total_urip'], "lintang": w['lintang_nama'], 
-            "watak_hari": w['watak_sapta'], "watak_pasar": w['watak_panca'],
-            "sasih": s['sasih_label'], "next_otonan": hari_ini + datetime.timedelta(days=sisa)
+            "weton_text": f"{wew['sapta']} {wew['panca']} {cal['wuku_name']}",
+            "urip_total": wew['total_urip'],
+            "hasil_analisa": {"bintang": wew['lintang_nama'], "watak": wew['lintang_sifat']},
+            "next_otonan_date": now + timedelta(days=days_until),
+            "sisa_hari": days_until
         }
 
 # ==========================================
-# 8. RENDER UI (MOBILE OPTIMIZED)
+# 8. UI DASHBOARD (STREAMLIT)
 # ==========================================
-st.set_page_config(page_title="Ka-Tika Wangsa Agra", page_icon="🔆", layout="centered")
 
-# CSS Injection
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap');
-    .stApp { background-color: #0e1117; }
-    .header-box { text-align: center; font-family: 'Cinzel', serif; padding: 15px 0; }
-    .header-mid { font-size: 32px; font-weight: 700; color: #e0e0e0; margin: 5px 0; }
-    .header-sub { font-size: 12px; letter-spacing: 4px; color: #8b7355; }
-    .sapta-wara { font-size: 58px; font-weight: 800; text-align: center; color: #fff; line-height: 1; font-family: 'Inter'; text-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-    .tri-panca { font-size: 16px; text-align: center; color: #9e9e9e; letter-spacing: 2px; text-transform: uppercase; }
-    .widget-container { display: flex; gap: 10px; margin-top: 20px; justify-content: center; }
-    .widget-box { background: #1c1f26; border: 1px solid #333; border-radius: 12px; padding: 10px; text-align: center; flex: 1; }
-    .widget-val { font-size: 13px; font-weight: 600; color: #e0e0e0; }
-    .rainan-notif { background: rgba(30, 81, 40, 0.9); color: #a5d6a7; padding: 10px; border-radius: 8px; text-align: center; font-weight: 600; margin: 15px 0; }
-</style>
-""", unsafe_allow_html=True)
+# Init Modules
+pulse_mod = KaTikaPulse()
+wew_mod = KaTikaWewaran()
+cal_mod = KaTikaCalendar()
+sas_mod = KaTikaSasih()
+padewasan_mod = KaTikaPadewasan(cal_mod, wew_mod, sas_mod, pulse_mod)
+odalan_mod = KaTikaOdalan()
+otonan_mod = KaTikaOtonan(pulse_mod, cal_mod, wew_mod, sas_mod)
 
-# Header & Notif
-st.markdown(f'<div class="header-box"><div class="header-mid">KA-TIKA</div><div class="header-sub">WANGSA AGRA</div></div>', unsafe_allow_html=True)
-if rains: st.markdown(f'<div class="rainan-notif">🔔 {" • ".join(rains)}</div>', unsafe_allow_html=True)
+st.set_page_config(page_title="Ka-Tika Dashboard", layout="wide", page_icon="🌞")
 
-# Hero Section
-st.markdown(f'<div class="tri-panca">{w_d["tri"]} — {c_d["panca"]}</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="sapta-wara">{c_d["sapta"].upper()}</div>', unsafe_allow_html=True)
-st.markdown(f'<div style="text-align:center; color:#bfa15f; font-size:12px; font-style:italic;">{range_text}</div>', unsafe_allow_html=True)
-
-# Widgets (Update: Menampilkan Data Astronomis)
-st.markdown(f"""
-<div class="widget-container">
-    <div class="widget-box">
-        <div style="font-size:20px">🌅</div>
-        <div class="widget-val">Terbit</div>
-        <div style="font-size:11px; color:#bfa15f;">{heart['sunrise'].strftime('%H:%M')}</div>
-    </div>
-    <div class="widget-box">
-        <div style="font-size:24px; color:#fff; font-weight:bold;">{heart['cycle_type']}</div>
-        <div style="font-size:10px; color:#888;">{heart['phase']}</div>
-    </div>
-    <div class="widget-box">
-        <div style="font-size:20px">🌇</div>
-        <div class="widget-val">Terbenam</div>
-        <div style="font-size:11px; color:#bfa15f;">{heart['sunset'].strftime('%H:%M')}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Tabs
-st.markdown("<br>", unsafe_allow_html=True)
-tab_h, tab_s, tab_w, tab_d, tab_r = st.tabs(["🏠 Info", "🔍 Cari", "👶 Weton", "🌺 Dewasa", "📅 Rainan"])
-
-# Tab 1: Info
-with tab_h:
-    st.markdown("---")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Wuku", c_d['wuku']); c2.metric("Urip", w_d['total_urip']); c3.metric("Dina", f"Ke-{s_d['dina_lokal']}")
-    st.info(f"**Posisi Sasih:** {s_d['status_wariga']} | {s_d['sasih_label']}")
-
-# Tab 2: Pencarian
-with tab_s:
-    ts_in = st.date_input("Tanggal Target", datetime.date.today())
-    if st.button("Analisis", type="primary", use_container_width=True):
-        res_s = search_engine.analisis_tanggal(ts_in)
-        st.success(f"{res_s['sapta']} {res_s['panca']} {res_s['wuku']} | Sasih {res_s['sasih']}")
-        st.caption(f"Fase: {res_s['fase_bulan']}")
-
-# Tab 3: Weton
-with tab_w:
-    t_l = st.date_input("Tanggal Lahir", datetime.date(1995, 1, 1))
-    if st.button("Cek Weton", type="primary", use_container_width=True):
-        res = oto.hitung(t_l)
-        st.markdown(f"<h3 style='text-align:center; color:#e91e63'>{res['weton_text']}</h3>", unsafe_allow_html=True)
-        st.caption(f"Urip: {res['urip']} | Lintang: {res['lintang']}")
-        st.warning(f"**Watak:** {res['watak_hari']}")
-
-# Tab 4: Dewasa Ayu
-with tab_d:
-    kp = st.selectbox("Keperluan", ["💍 Pernikahan (Wiwaha)", "🏗️ Membangun (Wewangunan)", "💰 Memulai Usaha (Dagang)", "🌾 Pertanian (Nandur)", "🎣 Melaut (Nelayan)"], label_visibility="collapsed")
-    sub_cat = None
-    if "Usaha" in kp: sub_cat = st.selectbox("Dagangan", ["Emas, Perhiasan", "Sayur, Minuman", "Besi, Elektronik", "Sembako, Umum", "Pakaian, Buku", "Kosmetik, Seni", "Properti, Bangunan"])
+# CSS Styling
+def inject_css(theme):
+    bg = "#0e1117" if theme == "Dark" else "#f0f2f6"
+    txt = "#ffffff" if theme == "Dark" else "#31333F"
+    card = "rgba(255, 255, 255, 0.05)" if theme == "Dark" else "rgba(255, 255, 255, 0.6)"
     
-    if st.button("Scan Hari Baik (1 Thn)", type="primary", use_container_width=True):
-        code = "nikah"
-        if "Membangun" in kp: code = "bangun"
-        elif "Pertanian" in kp: code = "tani"
-        elif "Melaut" in kp: code = "laut"
-        elif "Usaha" in kp: code = "usaha"
-        
-        h = dew.find_dewasa_yearly(code, datetime.date.today(), sub_cat)
-        if h: st.dataframe(h, use_container_width=True, hide_index=True)
-        else: st.error("Belum ada hari baik UTAMA terdekat.")
+    st.markdown(f"""
+    <style>
+        .stApp {{ background-color: {bg}; color: {txt}; }}
+        .glass {{
+            background: {card}; backdrop-filter: blur(10px);
+            border-radius: 15px; border: 1px solid rgba(255,255,255,0.18);
+            padding: 20px; margin-bottom: 20px;
+        }}
+        .big {{ font-size: 2.5rem; font-weight: bold; line-height: 1.2; }}
+        .med {{ font-size: 1.5rem; opacity: 0.9; }}
+    </style>
+    """, unsafe_allow_html=True)
 
-# Tab 5: Rainan
-with tab_r:
-    if rains: 
-        for r in rains: st.success(f"• {r}")
-    else: st.caption("Tidak ada rainan besar hari ini.")
+# Sidebar
+st.sidebar.title("🌸 Ka-Tika")
+theme = st.sidebar.radio("Mode", ["Dark", "Light"], horizontal=True)
+inject_css(theme)
+menu = st.sidebar.selectbox("Navigasi", ["Home", "Cek Weton", "Dewasa Ayu", "Odalan"])
+
+now = datetime.now(pulse_mod.timezone)
+
+if menu == "Home":
+    st.title(f"Rahina {now.strftime('%A, %d %B %Y')}")
+    pulse = pulse_mod.get_heartbeat(now)
+    wew = wew_mod.get_wewaran_lengkap(pulse['signal'])
+    cal = cal_mod.get_calendar(pulse['signal'], wew)
+    sas = sas_mod.get_sasih_info(pulse['signal'])
+    
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown(f"""
+        <div class="glass">
+            <div>Dina Ini</div>
+            <div class="big">{wew['sapta']} {wew['panca']}</div>
+            <div class="med">{wew['tri']} - {cal['wuku_name']}</div>
+            <hr>
+            <div>Ingkel: {cal['ingkel_name']} | Sasih: {sas['sasih_name']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        # Surya Progress
+        curr_sec = (now - pulse['sunrise']).total_seconds()
+        tot_sec = (pulse['sunset'] - pulse['sunrise']).total_seconds()
+        pct = max(0, min(100, (curr_sec / tot_sec) * 100))
+        st.markdown(f"""<div class="glass" style="text-align:center"><div>☀️ Surya ({pulse['phase']})</div></div>""", unsafe_allow_html=True)
+        st.progress(int(pct))
+    
+    colA, colB, colC = st.columns(3)
+    with colA: st.markdown(f"""<div class="glass"><h4>🌙 Bulan</h4><h2>{sas['status_bulan']}</h2></div>""", unsafe_allow_html=True)
+    with colB: st.markdown(f"""<div class="glass"><h4>👹 Dasa Wara</h4><h2>{wew['dasa']}</h2></div>""", unsafe_allow_html=True)
+    with colC: st.markdown(f"""<div class="glass"><h4>🗓️ Masehi</h4><h2>{now.day}</h2></div>""", unsafe_allow_html=True)
+
+elif menu == "Cek Weton":
+    st.title("🎂 Cek Weton & Watak")
+    with st.container():
+        st.markdown('<div class="glass">', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        tgl = c1.date_input("Tanggal Lahir", value=date(2000, 1, 1))
+        jam = c2.time_input("Jam Lahir", value=time(12, 0))
+        
+        if st.button("Analisa"):
+            res = otonan_mod.hitung(datetime.combine(tgl, jam))
+            st.success(f"Weton: {res['weton_text']}")
+            st.info(f"Watak: {res['hasil_analisa']['bintang']} - {res['hasil_analisa']['watak']}")
+            st.warning(f"Otonan Berikutnya: {res['next_otonan_date'].strftime('%d %B %Y')} ({res['sisa_hari']} hari lagi)")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+elif menu == "Dewasa Ayu":
+    st.title("✅ Pencarian Dewasa Ayu")
+    cat = st.selectbox("Kategori", padewasan_mod.CATEGORIES)
+    if st.button("Cari Hari Baik"):
+        with st.spinner("Scanning 365 hari (Logika Wariga)..."):
+            res = padewasan_mod.cari_dewasa_ayu()
+            filtered = [r for r in res if r['kategori'] == cat]
+            if filtered:
+                st.success(f"Ditemukan {filtered[0]['jumlah_hari']} hari baik.")
+                st.write(filtered[0]['Tanggal masehi'])
+            else:
+                st.error("Tidak ditemukan hari baik yang memenuhi syarat dalam 1 tahun ke depan.")
+
+elif menu == "Odalan":
+    st.title("🙏 Jadwal Odalan Pura")
+    if st.button("Scan Odalan (1 Tahun)"):
+        with st.spinner("Mencocokkan Database Sad Kahyangan & Jajar Kemiri..."):
+            data = odalan_mod.scan_year(wew_mod, cal_mod, sas_mod, pulse_mod)
+        if data:
+            st.dataframe(pd.DataFrame(data), use_container_width=True)
+        else:
+            st.info("Tidak ada odalan dalam database untuk rentang ini.")
